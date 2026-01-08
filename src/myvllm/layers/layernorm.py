@@ -7,7 +7,7 @@ class LayerNorm(torch.nn.Module):
         self.register_buffer('gamma', gamma)
         self.eps = eps
 
-    # @torch.compile # Comment out this decorator when running non-compiled benchmarks.
+    @torch.compile
     def rms_forward(self, x: torch.Tensor) -> torch.Tensor:
         # RMSNorm(x) = (x / sqrt(mean(x²) + ε)) ⊙ γ
 
