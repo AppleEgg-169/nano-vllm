@@ -75,7 +75,7 @@ class Scheduler:
     # if finished, deallocate blocks
     def postprocess(self, seqs: list[Sequence], token_ids: list[int]) -> None:
         for seq, token_id in zip(seqs, token_ids):
-            seq.token_ids.append(token_id)
+            seq.append_token(token_id)
             if (not seq.ignore_eos and token_id == self.eos) or 1 + seq.num_completion_tokens >= seq.max_tokens:
                 seq.status = SequenceStatus.FINISHED
                 self.block_manager.deallocate(seq)
