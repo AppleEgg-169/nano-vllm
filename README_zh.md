@@ -13,7 +13,7 @@
 提供了预填充阶段的FlashAttention以及解码阶段的Pageattention的基准测试。
 
 
-**第一次接触vLLM?** 阅读 [HowToApproachvLLM.md](HowToApproachvLLM.md) 从零开始实现vLLM！学习vLLM中layers、models、Pageattention、FlashAttention、CUDA graphs以及调度实现。
+**第一次接触vLLM?** 阅读 [HowToApproachvLLM_zh.md](HowToApproachvLLM_zh.md) 从零开始实现vLLM！学习vLLM中layers、models、Pageattention、FlashAttention、CUDA graphs以及调度实现。
 
 ## 快速开始
 

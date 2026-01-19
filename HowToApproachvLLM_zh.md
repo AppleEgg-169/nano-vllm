@@ -1,4 +1,8 @@
-# vLLM 技术路线
+<h1 align="center">vLLM 技术路线</h1>
+<p align="center">
+| <a href="./HowToApproachvLLM.md"><b>English</b></a> 
+| <a href="./HowToApproachvLLM_zh.md"><b>简体中文</b></a> |
+</p>
 
 本文档提供了理解和复现一个最小vLLM的分步指南。通过该文档的小结顺序以获得最佳学习体验。
 
