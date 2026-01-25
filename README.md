@@ -22,7 +22,7 @@ outputs = llm.generate(prompts, sampling_params)
 outputs[0]["text"]
 ```
 
-online usage example:
+online benchmarking:
 ```
 python serving_bench.py \
 --model /path/to/Qwen3-14B/ \
