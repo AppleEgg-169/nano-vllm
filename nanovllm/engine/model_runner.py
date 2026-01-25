@@ -94,6 +94,8 @@ class ModelRunner:
         max_num_batched_tokens, max_model_len = self.config.max_num_batched_tokens, self.config.max_model_len
         num_seqs = max(min(max_num_batched_tokens // max_model_len, self.config.max_num_seqs), 1)
         seqs = [Sequence([0] * max_model_len) for _ in range(num_seqs)]
+        for seq in seqs:
+            seq.num_new_tokens = max_model_len
         self.run(seqs)
         torch.cuda.empty_cache()
 
