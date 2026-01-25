@@ -40,6 +40,17 @@ class ModelRunner:
 
         if self.world_size > 1:
             if rank == 0:
+                # 尝试清理已存在的共享内存
+                try:
+                    existing_shm = SharedMemory(name="nanovllm", create=False)
+                    existing_shm.close()
+                    existing_shm.unlink()  # 标记删除
+                    print(f"Cleaned up existing shared memory: nanovllm")
+                except FileNotFoundError:
+                    pass
+                except Exception as e:
+                    print(f"Error cleaning up shared memory: {e}")
+
                 self.shm = SharedMemory(name="nanovllm", create=True, size=2**20)
                 dist.barrier()
             else:
