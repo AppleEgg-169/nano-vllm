@@ -30,7 +30,8 @@ python serving_bench.py \
 --num-requests 1024 \
 --tensor-parallel-size 1 \
 --max-num-batched-tokens 1024 \
---max-num-seqs 1024 --random-input-len 128 \
+--max-num-seqs 1024 \
+--random-input-len 128 \
 --random-output-len 100 \
 --chunked-prefill \
 --enforce-eager
