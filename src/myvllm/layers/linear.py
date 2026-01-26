@@ -227,5 +227,12 @@ class RowParallelLinear(LinearBase):
 
 if __name__ == "__main__":
     # Example usage
+    if dist.is_available() and not dist.is_initialized():
+        dist.init_process_group(
+            backend="gloo",
+            init_method="tcp://127.0.0.1:29500",
+            rank=0,
+            world_size=1,
+        )
     layer = LinearBase(input_size=10, output_size=5)
     print("LinearBase layer initialized:", layer)
