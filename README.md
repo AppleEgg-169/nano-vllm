@@ -99,3 +99,8 @@ myvllm/
 - Python ≥3.11, < 3.12
 - CUDA-capable GPU
 - Dependencies: `transformers`, `torch`, `xxhash` (managed by uv)
+
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=Wenyueh/MinivLLM&type=date&legend=top-left)](https://www.star-history.com/?utm_source=chatgpt.com#Wenyueh/MinivLLM&type=date&legend=top-left)
