@@ -43,7 +43,7 @@ class ModelRunner:
             block_size=self.block_size,
         )
 
-        # IMPORTANT: Move to CUDA BEFORE loading weights to avoid incorrect behavior
+        # IMPORTANT: Move to CUDA before loading weights to avoid incorrect behavior
         self.model = self.model.cuda(rank)
 
         # Load pretrained weights if model_name_or_path is provided
