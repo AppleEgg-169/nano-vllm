@@ -51,9 +51,10 @@ def main():
     # both should be set in SamplingParams and help to determine when to stop generation
     sampling_params = SamplingParams(temperature=0.6, max_tokens=256, max_model_length=128)
     prompts = [
-        "introduce yourself" * 15,
-        "list all prime numbers within 100" * 15,
-    ] * 30
+        "introduce yourself",# * 15,
+        "list all prime numbers within 100",# * 15,
+        "give me your opinion on the impact of artificial intelligence on society",# * 15,
+    ] #* 30
     prompts = [
         tokenizer.apply_chat_template(
             [{"role": "user", "content": prompt}],
@@ -64,10 +65,13 @@ def main():
     ]
     outputs = llm.generate(prompts, sampling_params)
 
-    # for prompt, output in zip(prompts, outputs):
-    #     print("\n")
-    #     print(f"Prompt: {prompt!r}")
-    #     print(f"Completion: {output['text']!r}")
+    # outputs is a dict with 'text' and 'token_ids' keys
+    generated_texts = outputs['text']
+
+    for prompt, output in zip(prompts, generated_texts):
+        print("\n")
+        print(f"Prompt: {prompt}")
+        print(f"Completion: {output}")
 
 
 if __name__ == "__main__":

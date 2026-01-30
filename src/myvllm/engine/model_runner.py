@@ -44,15 +44,8 @@ class ModelRunner:
 
         # Load pretrained weights if model_name_or_path is provided
         if config.get('model_name_or_path'):
-            if self.rank == 0:
-                print(f"Loading pretrained weights from {config['model_name_or_path']}...")
             from myvllm.utils.loader import load_weights_from_checkpoint
             load_weights_from_checkpoint(self.model, config['model_name_or_path'])
-            if self.rank == 0:
-                print(f"Weights loaded successfully on all ranks")
-        else:
-            if self.rank == 0:
-                print("No model_name_or_path provided, using random initialization")
 
         self.model = self.model.cuda(rank)
         self.sampler = SamplerLayer()

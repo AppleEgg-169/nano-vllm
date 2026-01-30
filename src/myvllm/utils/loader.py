@@ -103,7 +103,6 @@ def load_weights_from_checkpoint(model: nn.Module, model_name_or_path: str):
                             loaded_params.add(hf_name)
                             loaded_params.add(k_name)
                             loaded_params.add(v_name)
-                            print(f"  ✓ Merged QKV: {custom_name}")
                         except AttributeError:
                             skipped_params.append((custom_name, "Parameter not found"))
 
@@ -128,7 +127,6 @@ def load_weights_from_checkpoint(model: nn.Module, model_name_or_path: str):
                             loaded_params.add(custom_name)
                             loaded_params.add(hf_name)
                             loaded_params.add(up_name)
-                            print(f"  ✓ Merged gate_up: {custom_name}")
                         except AttributeError:
                             skipped_params.append((custom_name, "Parameter not found"))
 
@@ -151,7 +149,6 @@ def load_weights_from_checkpoint(model: nn.Module, model_name_or_path: str):
                             loaded_params.add(custom_name)
                             loaded_params.add(hf_name)
                             loaded_params.add(up_bias_name)
-                            print(f"  ✓ Merged gate_up bias: {custom_name}")
                         except AttributeError:
                             skipped_params.append((custom_name, "Parameter not found"))
 
@@ -175,7 +172,6 @@ def load_weights_from_checkpoint(model: nn.Module, model_name_or_path: str):
                     else:
                         param.data.copy_(hf_weight)
                     loaded_params.add(hf_name)
-                    print(f"  ✓ Loaded: {hf_name}")
                 except AttributeError:
                     skipped_params.append((hf_name, "Parameter not found"))
 
