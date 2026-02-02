@@ -8,6 +8,7 @@ dependencies = [
     "transformers",
     "torch",
     "xxhash",
+    "vllm>=0.15.0",
 ]
 
 [project.optional-dependencies]
