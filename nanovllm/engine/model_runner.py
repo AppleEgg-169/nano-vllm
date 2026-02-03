@@ -31,16 +31,14 @@ class ModelRunner:
         torch.set_default_device("cuda")
         free, total = torch.cuda.mem_get_info()
         used = total - free
-        peak = torch.cuda.memory_stats()["allocated_bytes.all.peak"]
-        current = torch.cuda.memory_stats()["allocated_bytes.all.current"]
         print(
-            f"总内存大小为 {total / 1024**3:.2f} GB，已被占用内存为 {used / 1024**3:.2f} GB，峰值内存为 {peak / 1024**3:.2f} GB，当前占用内存为 {current / 1024**3:.2f} GB。"
+            f"[rank {self.rank}]总内存大小为 {total / 1024**3:.2f} GB，已被占用内存为 {used / 1024**3:.2f} GB"
         )
-        print("正在加载模型...")
+        print(f"[rank {self.rank}]正在加载模型...")
         self.model = Qwen3ForCausalLM(hf_config)
         load_model(self.model, config.model)
         print(
-            f"模型加载完成，占用内存为 {(torch.cuda.memory_stats()['allocated_bytes.all.current'] - current) / 1024**3:.2f} GB。"
+            f"[rank {self.rank}]模型加载完成，占用内存为 {(torch.cuda.memory_stats()['allocated_bytes.all.current']) / 1024**3:.2f} GB。"
         )
         self.sampler = Sampler()
         self.warmup_model()
@@ -136,14 +134,13 @@ class ModelRunner:
             * hf_config.dtype.itemsize
         )
         config.num_kvcache_blocks = (
-            int(total * config.gpu_memory_utilization - used - peak + current)
-            // block_bytes
+            int(total * config.gpu_memory_utilization - peak) // block_bytes
         )
         print(
-            f"总内存大小为 {total / 1024**3:.2f} GB，已被占用内存为 {used / 1024**3:.2f} GB，峰值内存为 {peak / 1024**3:.2f} GB，当前占用内存为 {current / 1024**3:.2f} GB。"
+            f"[rank {self.rank}]总内存大小为 {total / 1024**3:.2f} GB，已被占用内存为 {used / 1024**3:.2f} GB，请求内存大小为 {total * config.gpu_memory_utilization / 1024**3:.2f}GB， 峰值内存为 {peak / 1024**3:.2f} GB，当前占用内存为 {current / 1024**3:.2f} GB。"
         )
         print(
-            f"为KV缓存分配 {config.num_kvcache_blocks} 个块，块的大小为：{self.block_size} tokens, 每块占用内存为{block_bytes / 1024**3:.2f} GB，总大小为 {block_bytes * config.num_kvcache_blocks / 1024**3:.2f} GB。"
+            f"[rank {self.rank}]为KV缓存分配 {config.num_kvcache_blocks} 个块，块的大小为：{self.block_size} tokens, 每块占用内存为{block_bytes / 1024**3:.2f} GB，总大小为 {block_bytes * config.num_kvcache_blocks / 1024**3:.2f} GB。"
         )
         assert config.num_kvcache_blocks > 0
         self.kv_cache = torch.empty(
