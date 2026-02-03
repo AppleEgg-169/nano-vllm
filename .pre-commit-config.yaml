@@ -1,0 +1,15 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0          # 或运行 pre-commit autoupdate 拿到最新
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.14        # 2026 年 1 月底最新
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]   # 自动修复能修的 + lint
+      - id: ruff-format                       # Ruff 自带格式化（兼容 Black 大部分风格）
