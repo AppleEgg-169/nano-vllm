@@ -15,7 +15,7 @@ class Sequence:
     block_size = 256
     counter = count()
 
-    def __init__(self, token_ids: list[int], sampling_params = SamplingParams()):
+    def __init__(self, token_ids: list[int], sampling_params=SamplingParams()):
         self.seq_id = next(Sequence.counter)
         self.status = SequenceStatus.WAITING
         self.token_ids = copy(token_ids)
@@ -23,6 +23,7 @@ class Sequence:
         self.num_tokens = len(self.token_ids)
         self.num_prompt_tokens = len(token_ids)
         self.num_cached_tokens = 0
+        self.num_new_tokens = 0
         self.block_table = []
         self.temperature = sampling_params.temperature
         self.max_tokens = sampling_params.max_tokens
@@ -43,16 +44,27 @@ class Sequence:
         return self.num_tokens - self.num_prompt_tokens
 
     @property
+    def num_context_tokens(self):
+        return self.num_cached_tokens + self.num_new_tokens
+
+    @property
     def prompt_token_ids(self):
-        return self.token_ids[:self.num_prompt_tokens]
+        return self.token_ids[: self.num_prompt_tokens]
 
     @property
     def completion_token_ids(self):
-        return self.token_ids[self.num_prompt_tokens:]
+        return self.token_ids[self.num_prompt_tokens :]
 
     @property
     def num_cached_blocks(self):
         return self.num_cached_tokens // self.block_size
+
+    @property
+    def num_current_blocks(self):
+        assert (
+            self.num_cached_tokens + self.num_new_tokens + self.block_size - 1
+        ) // self.block_size == len(self.block_table)
+        return len(self.block_table)
 
     @property
     def num_blocks(self):
@@ -64,20 +76,34 @@ class Sequence:
 
     def block(self, i):
         assert 0 <= i < self.num_blocks
-        return self.token_ids[i*self.block_size: (i+1)*self.block_size]
+        return self.token_ids[i * self.block_size : (i + 1) * self.block_size]
 
     def append_token(self, token_id: int):
         self.token_ids.append(token_id)
         self.last_token = token_id
         self.num_tokens += 1
+        assert self.num_tokens == len(self.token_ids)
 
     def __getstate__(self):
-        return (self.num_tokens, self.num_prompt_tokens, self.num_cached_tokens, self.block_table,
-                self.token_ids if self.num_completion_tokens == 0 else self.last_token)
+        return (
+            self.token_ids,
+            self.last_token,
+            self.num_tokens,
+            self.num_prompt_tokens,
+            self.num_cached_tokens,
+            self.num_new_tokens,
+            self.block_table,
+            self.temperature,
+        )
 
     def __setstate__(self, state):
-        self.num_tokens, self.num_prompt_tokens, self.num_cached_tokens, self.block_table = state[:-1]
-        if self.num_completion_tokens == 0:
-            self.token_ids = state[-1]
-        else:
-            self.last_token = state[-1]
+        (
+            self.token_ids,
+            self.last_token,
+            self.num_tokens,
+            self.num_prompt_tokens,
+            self.num_cached_tokens,
+            self.num_new_tokens,
+            self.block_table,
+            self.temperature,
+        ) = state

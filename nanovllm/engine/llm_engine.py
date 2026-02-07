@@ -45,13 +45,13 @@ class LLMEngine:
         self.scheduler.add(seq)
 
     def step(self):
-        seqs, is_prefill = self.scheduler.schedule()
-        token_ids = self.model_runner.call("run", seqs, is_prefill)
+        seqs = self.scheduler.schedule()
+        token_ids = self.model_runner.call("run", seqs)
         self.scheduler.postprocess(seqs, token_ids)
         outputs = [
             (seq.seq_id, seq.completion_token_ids) for seq in seqs if seq.is_finished
         ]
-        num_tokens = sum(len(seq) for seq in seqs) if is_prefill else -len(seqs)
+        num_tokens = sum(len(seq) for seq in seqs if seq.is_finished)
         return outputs, num_tokens
 
     def is_finished(self):
@@ -61,7 +61,7 @@ class LLMEngine:
         self,
         prompts: list[str] | list[list[int]],
         sampling_params: SamplingParams | list[SamplingParams],
-        use_tqdm: bool = False,
+        use_tqdm: bool = True,
     ) -> list[str]:
         if use_tqdm:
             pbar = tqdm(total=len(prompts), desc="Generating", dynamic_ncols=True)
@@ -70,21 +70,19 @@ class LLMEngine:
         for prompt, sp in zip(prompts, sampling_params):
             self.add_request(prompt, sp)
         outputs = {}
-        prefill_throughput = decode_throughput = 0.0
+        num_total_tokens = 0
+        t = perf_counter()
         while not self.is_finished():
-            t = perf_counter()
-            output, num_tokens = self.step()
+            output, num_step_tokens = self.step()
+            num_total_tokens += num_step_tokens
             if use_tqdm:
-                if num_tokens > 0:
-                    prefill_throughput = num_tokens / (perf_counter() - t)
-                else:
-                    decode_throughput = -num_tokens / (perf_counter() - t)
+                total_throughput = num_total_tokens / (perf_counter() - t)
                 pbar.set_postfix(
                     {
-                        "Prefill": f"{int(prefill_throughput)}tok/s",
-                        "Decode": f"{int(decode_throughput)}tok/s",
+                        "total_throughput": f"{int(total_throughput)}tok/s",
                     }
                 )
+
             for seq_id, token_ids in output:
                 outputs[seq_id] = token_ids
                 if use_tqdm:
