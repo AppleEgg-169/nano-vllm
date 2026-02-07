@@ -94,6 +94,9 @@ class Sequence:
             self.num_new_tokens,
             self.block_table,
             self.temperature,
+            self.max_tokens,
+            self.ignore_eos,
+            self.status,
         )
 
     def __setstate__(self, state):
@@ -106,4 +109,7 @@ class Sequence:
             self.num_new_tokens,
             self.block_table,
             self.temperature,
+            self.max_tokens,
+            self.ignore_eos,
+            self.status,
         ) = state

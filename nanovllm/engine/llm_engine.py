@@ -17,6 +17,7 @@ class LLMEngine:
         config_fields = {field.name for field in fields(Config)}
         config_kwargs = {k: v for k, v in kwargs.items() if k in config_fields}
         config = Config(model, **config_kwargs)
+        Sequence.block_size = config.kvcache_block_size
         self.ps = []
         self.events = []
         ctx = mp.get_context("spawn")
@@ -46,8 +47,8 @@ class LLMEngine:
 
     def step(self):
         seqs = self.scheduler.schedule()
-        token_ids = self.model_runner.call("run", seqs)
-        self.scheduler.postprocess(seqs, token_ids)
+        token_ids, seq_need_compute_logits = self.model_runner.call("run", seqs)
+        self.scheduler.postprocess(seqs, token_ids, seq_need_compute_logits)
         outputs = [
             (seq.seq_id, seq.completion_token_ids) for seq in seqs if seq.is_finished
         ]

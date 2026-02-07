@@ -11,9 +11,14 @@ def main():
     max_input_len = 1024
     max_ouput_len = 1024
 
-    path = os.path.expanduser("/data/models/Qwen/Qwen3-0.6B")
-    llm = LLM(path, enforce_eager=False, max_model_len=4096)
-
+    model_path = os.path.expanduser("/data/models/Qwen/Qwen3-0.6B")
+    llm = LLM(
+        model_path,
+        enforce_eager=True,
+        max_model_len=4096,
+        chunked_prefill=True,
+        tensor_parallel_size=2,
+    )
     prompt_token_ids = [
         [randint(0, 10000) for _ in range(randint(100, max_input_len))]
         for _ in range(num_seqs)

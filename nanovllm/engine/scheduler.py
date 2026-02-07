@@ -27,7 +27,7 @@ class Scheduler:
         )
         self.waiting.append(seq)
 
-    def schedule(self) -> tuple[list[Sequence], bool]:
+    def schedule(self) -> list[Sequence]:
         scheduled_seqs = []
         seq_budget = self.max_num_seqs
         token_budget = self.max_num_batched_tokens
@@ -58,6 +58,7 @@ class Scheduler:
                 token_budget -= num_new_tokens
                 seq_budget -= 1
 
+        # prefill
         if not preempted:
             while self.waiting and seq_budget > 0 and token_budget > 0:
                 seq = self.waiting[0]
@@ -69,11 +70,8 @@ class Scheduler:
                 if self.enable_chunked:
                     num_new_tokens = min(num_new_tokens, token_budget)
 
-                if (
-                    token_budget < seq.num_new_tokens
-                    or not self.block_manager.can_allocate(
-                        num_new_tokens + num_cached_tokens_free
-                    )
+                if token_budget < num_new_tokens or not self.block_manager.can_allocate(
+                    num_new_tokens + num_cached_tokens_free
                 ):
                     break
                 seq.num_new_tokens = num_new_tokens
@@ -98,8 +96,12 @@ class Scheduler:
         self.block_manager.deallocate(seq)
         self.waiting.appendleft(seq)
 
-    def postprocess(self, seqs: list[Sequence], token_ids: list[int]) -> list[bool]:
-        for seq, token_id in zip(seqs, token_ids):
+    def postprocess(
+        self, seqs: list[Sequence], token_ids: list[int], seq_need_compute_logits
+    ) -> list[bool]:
+        assert len(token_ids) == len(seq_need_compute_logits)
+        for seq_index, token_id in zip(seq_need_compute_logits, token_ids):
+            seq = seqs[seq_index]
             seq.append_token(token_id)
             if (
                 not seq.ignore_eos and token_id == self.eos

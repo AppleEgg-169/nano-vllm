@@ -22,10 +22,14 @@ class ModelRunner:
         self.rank = rank
         self.event = event
 
-        dist.init_process_group(
-            "nccl", "tcp://localhost:2333", world_size=self.world_size, rank=rank
-        )
         torch.cuda.set_device(rank)
+        dist.init_process_group(
+            "nccl",
+            init_method="tcp://localhost:2333",
+            world_size=self.world_size,
+            rank=rank,
+            device_id=rank,
+        )
         default_dtype = torch.get_default_dtype()
         torch.set_default_dtype(hf_config.dtype)
         torch.set_default_device("cuda")
@@ -249,7 +253,7 @@ class ModelRunner:
         context_lens = torch.tensor(
             context_lens, dtype=torch.int32, pin_memory=True
         ).cuda(non_blocking=True)
-        seq_need_compute_logits = torch.tensor(
+        seq_need_compute_logits_tensor = torch.tensor(
             seq_need_compute_logits, dtype=torch.int32, pin_memory=True
         ).cuda(non_blocking=True)
         set_context(
@@ -260,14 +264,12 @@ class ModelRunner:
             slot_mapping,
             context_lens,
             block_tables,
-            seq_need_compute_logits,
+            seq_need_compute_logits_tensor,
         )
-        return input_ids, positions
+        return input_ids, positions, seq_need_compute_logits
 
-    def prepare_sample(self, seqs: list[Sequence]):
-        temperatures = []
-        for seq in seqs:
-            temperatures.append(seq.temperature)
+    def prepare_sample(self, seqs: list[Sequence], seq_need_compute_logits: list[int]):
+        temperatures = [seqs[i].temperature for i in seq_need_compute_logits]
         temperatures = torch.tensor(
             temperatures, dtype=torch.float32, pin_memory=True
         ).cuda(non_blocking=True)
@@ -288,21 +290,32 @@ class ModelRunner:
             graph_vars["slot_mapping"][:bs] = context.slot_mapping
             graph_vars["context_lens"].zero_()
             graph_vars["context_lens"][:bs] = context.context_lens
-            graph_vars["block_tables"][:bs, : context.block_tables.size(1)] = (
-                context.block_tables
-            )
+            graph_vars["block_tables"].fill_(-1)
+            if context.block_tables is not None:
+                graph_vars["block_tables"][:bs, : context.block_tables.size(1)] = (
+                    context.block_tables
+                )
+            graph_vars["cu_seqlens_q"].zero_()
+            graph_vars["cu_seqlens_q"][: bs + 1] = context.cu_seqlens_q
+            graph_vars["cu_seqlens_k"].zero_()
+            graph_vars["cu_seqlens_k"][: bs + 1] = context.cu_seqlens_k
             graph.replay()
             return self.model.compute_logits(graph_vars["outputs"][:bs])
 
     def run(self, seqs: list[Sequence]) -> list[int]:
-        input_ids, positions = self.prepare_model_input(seqs)
-        temperatures = self.prepare_sample(seqs) if self.rank == 0 else None
-        logits = self.run_model(input_ids, positions)
-        token_ids = (
-            self.sampler(logits, temperatures).tolist() if self.rank == 0 else None
-        )
+        input_ids, positions, seq_need_compute_logits = self.prepare_model_input(seqs)
+        if self.rank == 0 and seq_need_compute_logits:
+            temperatures = self.prepare_sample(seqs, seq_need_compute_logits)
+            logits = self.run_model(input_ids, positions)
+            token_ids = self.sampler(logits, temperatures).tolist()
+        elif self.rank == 0:
+            self.run_model(input_ids, positions)
+            token_ids = []
+        else:
+            token_ids = None
+            self.run_model(input_ids, positions)
         reset_context()
-        return token_ids
+        return token_ids, seq_need_compute_logits
 
     @torch.inference_mode()
     def capture_cudagraph(self):
@@ -315,6 +328,8 @@ class ModelRunner:
         slot_mapping = torch.zeros(max_bs, dtype=torch.int32)
         context_lens = torch.zeros(max_bs, dtype=torch.int32)
         block_tables = torch.zeros(max_bs, max_num_blocks, dtype=torch.int32)
+        cu_seqlens_q = torch.arange(0, max_bs + 1, dtype=torch.int32)
+        cu_seqlens_k = torch.arange(0, max_bs + 1, dtype=torch.int32)
         outputs = torch.zeros(max_bs, hf_config.hidden_size)
         self.graph_bs = [1, 2, 4, 8] + list(range(16, max_bs + 1, 16))
         self.graphs = {}
@@ -323,6 +338,10 @@ class ModelRunner:
         for bs in reversed(self.graph_bs):
             graph = torch.cuda.CUDAGraph()
             set_context(
+                cu_seqlens_q=cu_seqlens_q[: bs + 1],
+                cu_seqlens_k=cu_seqlens_k[: bs + 1],
+                max_seqlen_q=1,
+                max_seqlen_k=1,
                 slot_mapping=slot_mapping[:bs],
                 context_lens=context_lens[:bs],
                 block_tables=block_tables[:bs],
@@ -342,5 +361,7 @@ class ModelRunner:
             slot_mapping=slot_mapping,
             context_lens=context_lens,
             block_tables=block_tables,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_k=cu_seqlens_k,
             outputs=outputs,
         )
