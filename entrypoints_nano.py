@@ -7,7 +7,7 @@ if __name__ == "__main__":
         tensor_parallel_size=1,
         chunked_prefill=True,
     )
-    sampling_params = SamplingParams(temperature=0.9, max_tokens=128)
+    sampling_params = SamplingParams(temperature=0.6, max_tokens=128)
     prompts = ["世界上最长的河流是哪一条？"]
     outputs = llm.generate(prompts, sampling_params)
 

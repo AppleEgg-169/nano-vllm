@@ -38,20 +38,20 @@ class BlockManager:
         h.update(np.array(token_ids).tobytes())
         return h.intdigest()
 
-    def _allocate_block(self, block_id: int) -> Block:
-        block = self.blocks[block_id]
-        assert block.ref_count == 0
-        if self.hash_to_block_id.get(block.hash) == block_id:
-            self.hash_to_block_id.pop(block.hash, None)
-        block.reset()
-        self.free_block_ids.remove(block_id)
-        self.used_block_ids.add(block_id)
-        return self.blocks[block_id]
-
     def _deallocate_block(self, block_id: int) -> Block:
         assert self.blocks[block_id].ref_count == 0
         self.used_block_ids.remove(block_id)
         self.free_block_ids.append(block_id)
+
+    def deallocate(self, seq: Sequence):
+        for block_id in reversed(seq.block_table):
+            block = self.blocks[block_id]
+            block.ref_count -= 1
+            if block.ref_count == 0:
+                self._deallocate_block(block_id)
+        seq.num_cached_tokens = 0
+        seq.num_new_tokens = 0
+        seq.block_table.clear()
 
     def can_allocate(self, num_tokens: int) -> bool:
         return (
@@ -59,7 +59,7 @@ class BlockManager:
             >= (num_tokens + self.block_size - 1) // self.block_size
         )
 
-    def compute_num_tokens(self, seq: Sequence) -> int:
+    def compute_num_tokens(self, seq: Sequence):
         num_new_tokens = 0
         num_new_computed_tokens_in_used = 0
         num_new_computed_tokens_in_free = 0
@@ -92,9 +92,20 @@ class BlockManager:
             num_new_computed_tokens_in_free,
         )
 
+    def _allocate_block(self, block_id: int) -> Block:
+        block = self.blocks[block_id]
+        assert block.ref_count == 0
+        if self.hash_to_block_id.get(block.hash) == block_id:
+            self.hash_to_block_id.pop(block.hash, None)
+        block.reset()
+        self.free_block_ids.remove(block_id)
+        self.used_block_ids.add(block_id)
+        return self.blocks[block_id]
+
     def allocate(self, seq: Sequence):
         assert not seq.block_table
         h = -1
+        # prefix cache
         for i in range(seq.num_blocks):
             token_ids = seq.block(i)
             h = (
@@ -120,6 +131,7 @@ class BlockManager:
             self.hash_to_block_id[h] = block_id
             seq.block_table.append(block_id)
 
+        # allocate new blocks
         for i in range(
             seq.num_cached_tokens,
             seq.num_cached_tokens + seq.num_new_tokens,
@@ -140,16 +152,6 @@ class BlockManager:
                 block.update(h, token_ids)
                 self.hash_to_block_id[h] = block_id
             seq.block_table.append(block_id)
-
-    def deallocate(self, seq: Sequence):
-        for block_id in reversed(seq.block_table):
-            block = self.blocks[block_id]
-            block.ref_count -= 1
-            if block.ref_count == 0:
-                self._deallocate_block(block_id)
-        seq.num_cached_tokens = 0
-        seq.num_new_tokens = 0
-        seq.block_table.clear()
 
     def can_append(self, seq: Sequence, num_new_tokens: int):
         last_computed_block_capacity = self.block_size - (
