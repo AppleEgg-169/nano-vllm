@@ -3,7 +3,6 @@ from torch import nn
 
 
 class RMSNorm(nn.Module):
-
     def __init__(
         self,
         hidden_size: int,
@@ -44,7 +43,21 @@ class RMSNorm(nn.Module):
         x: torch.Tensor,
         residual: torch.Tensor | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        return self.forward_triton(x, residual)
+
         if residual is None:
             return self.rms_forward(x)
         else:
             return self.add_rms_forward(x, residual)
+
+    def forward_triton(
+        self,
+        x: torch.Tensor,
+        residual: torch.Tensor | None = None,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        from nanovllm.ops import add_rms_norm_forward, rms_norm_forward
+
+        if residual is None:
+            return rms_norm_forward(x, self.weight, self.eps)
+        else:
+            return add_rms_norm_forward(x, residual, self.weight, self.eps)
