@@ -72,6 +72,56 @@ def _expand_kv_heads(
     return k, v
 
 
+def _torch_varlen_attention_cudagraph_decode(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    cu_seqlens_k: torch.Tensor,
+    scale: float,
+    block_table: torch.Tensor,
+) -> torch.Tensor:
+    # CUDA graph path is captured with decode layout: one q token per sequence.
+    bs, num_heads, head_dim = q.shape
+    if bs == 0:
+        return q.new_empty((0, num_heads, head_dim))
+    max_num_blocks = block_table.size(1)
+    block_size = k.size(1)
+    max_tokens = max_num_blocks * block_size
+    num_kv_heads = k.size(2)
+
+    # Any padded entries are clamped to 0 length to avoid invalid masks.
+    k_lens = cu_seqlens_k[1 : bs + 1] - cu_seqlens_k[:bs]
+    k_lens = torch.clamp(k_lens, min=0, max=max_tokens)
+    token_idx = torch.arange(max_tokens, device=q.device)
+
+    out = torch.empty_like(q)
+    for i in range(bs):
+        block_ids = block_table[i]
+        valid_blocks = block_ids >= 0
+        safe_block_ids = torch.where(
+            valid_blocks, block_ids, torch.zeros_like(block_ids)
+        ).to(torch.long)
+
+        k_i = k[safe_block_ids].reshape(max_tokens, num_kv_heads, head_dim)
+        v_i = v[safe_block_ids].reshape(max_tokens, num_kv_heads, head_dim)
+        k_i, v_i = _expand_kv_heads(k_i, v_i, num_heads)
+
+        valid_tokens = valid_blocks[:, None].expand(max_num_blocks, block_size)
+        valid_tokens = valid_tokens.reshape(max_tokens)
+        len_tokens = token_idx < k_lens[i]
+        attn_mask = valid_tokens & len_tokens
+
+        scores = torch.einsum("hd,khd->hk", q[i].float(), k_i.float()) * scale
+        scores.masked_fill_(~attn_mask.unsqueeze(0), -1e9)
+        attn = torch.softmax(scores, dim=-1)
+        out_i = torch.einsum("hk,khd->hd", attn, v_i.float()).to(dtype=q.dtype)
+
+        # Keep padded rows stable (all-zero) instead of producing garbage.
+        has_valid_k = ((k_lens[i] > 0) & valid_blocks.any()).to(dtype=out_i.dtype)
+        out[i] = out_i * has_valid_k
+    return out
+
+
 def torch_varlen_attention(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -84,6 +134,25 @@ def torch_varlen_attention(
 ) -> torch.Tensor:
     # q: [total_q, num_heads, d]
     # k,v: [total_k, num_kv_heads, d] OR cache [num_blocks, block_size, num_kv_heads, d] when block_table is not None
+    if torch.cuda.is_current_stream_capturing():
+        if (
+            block_table is None
+            or cu_seqlens_q.numel() != q.size(0) + 1
+            or cu_seqlens_k.numel() != q.size(0) + 1
+        ):
+            raise RuntimeError(
+                "torch_varlen_attention under CUDA Graph requires decode layout "
+                "(one query token per sequence) with block table."
+            )
+        return _torch_varlen_attention_cudagraph_decode(
+            q=q,
+            k=k,
+            v=v,
+            cu_seqlens_k=cu_seqlens_k,
+            scale=scale,
+            block_table=block_table,
+        )
+
     cu_q = cu_seqlens_q.detach().cpu().tolist()
     cu_k = cu_seqlens_k.detach().cpu().tolist()
     bs = len(cu_q) - 1

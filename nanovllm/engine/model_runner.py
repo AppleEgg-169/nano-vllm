@@ -12,6 +12,11 @@ from nanovllm.utils.context import set_context, get_context, reset_context
 from nanovllm.utils.loader import load_model
 
 
+def _is_cuda_oom_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return ("out of memory" in msg) or ("cudaerrormemoryallocation" in msg)
+
+
 class ModelRunner:
     def __init__(self, config: Config, rank: int, event: Event | list[Event]):
         self.config = config
@@ -277,12 +282,23 @@ class ModelRunner:
 
     @torch.inference_mode()
     def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor):
-        if self.enforce_eager or input_ids.size(0) > 512:
+        context = get_context()
+        # Captured graph is decode-only (one query token per sequence).
+        if (
+            self.enforce_eager
+            or input_ids.size(0) > 512
+            or context.max_seqlen_q != 1
+            or not hasattr(self, "graphs")
+            or not self.graphs
+        ):
             return self.model.compute_logits(self.model(input_ids, positions))
         else:
             bs = input_ids.size(0)
-            context = get_context()
-            graph = self.graphs[next(x for x in self.graph_bs if x >= bs)]
+            target_bs = next((x for x in self.graph_bs if x >= bs), None)
+            if target_bs is None:
+                # Request batch is larger than captured graph sizes.
+                return self.model.compute_logits(self.model(input_ids, positions))
+            graph = self.graphs[target_bs]
             graph_vars = self.graph_vars
             graph_vars["input_ids"][:bs] = input_ids
             graph_vars["positions"][:bs] = positions
@@ -331,11 +347,15 @@ class ModelRunner:
         cu_seqlens_q = torch.arange(0, max_bs + 1, dtype=torch.int32)
         cu_seqlens_k = torch.arange(0, max_bs + 1, dtype=torch.int32)
         outputs = torch.zeros(max_bs, hf_config.hidden_size)
-        self.graph_bs = [1, 2, 4, 8] + list(range(16, max_bs + 1, 16))
+        planned_graph_bs = [1, 2, 4, 8] + list(range(16, max_bs + 1, 16))
         self.graphs = {}
         self.graph_pool = None
+        capture_error_types = [torch.OutOfMemoryError, RuntimeError]
+        if hasattr(torch, "AcceleratorError"):
+            capture_error_types.append(torch.AcceleratorError)
+        capture_error_types = tuple(capture_error_types)
 
-        for bs in reversed(self.graph_bs):
+        for bs in planned_graph_bs:
             graph = torch.cuda.CUDAGraph()
             set_context(
                 cu_seqlens_q=cu_seqlens_q[: bs + 1],
@@ -346,14 +366,33 @@ class ModelRunner:
                 context_lens=context_lens[:bs],
                 block_tables=block_tables[:bs],
             )
-            outputs[:bs] = self.model(input_ids[:bs], positions[:bs])  # warmup
-            with torch.cuda.graph(graph, self.graph_pool):
-                outputs[:bs] = self.model(input_ids[:bs], positions[:bs])  # capture
+            try:
+                outputs[:bs] = self.model(input_ids[:bs], positions[:bs])  # warmup
+                with torch.cuda.graph(graph, self.graph_pool):
+                    outputs[:bs] = self.model(input_ids[:bs], positions[:bs])  # capture
+            except capture_error_types as e:
+                if not _is_cuda_oom_error(e):
+                    raise
+                # Capture memory rises with bs; stop at the first OOM and keep smaller graphs.
+                reset_context()
+                torch.cuda.empty_cache()
+                print(
+                    f"[rank {self.rank}]CUDA Graph capture OOM at bs={bs}, "
+                    "falling back to smaller captured batch sizes."
+                )
+                break
             if self.graph_pool is None:
                 self.graph_pool = graph.pool()
             self.graphs[bs] = graph
             torch.cuda.synchronize()
             reset_context()
+        self.graph_bs = sorted(self.graphs.keys())
+        if not self.graph_bs:
+            print(
+                f"[rank {self.rank}]CUDA Graph capture failed for all batch sizes, "
+                "switching to eager mode."
+            )
+            self.enforce_eager = True
 
         self.graph_vars = dict(
             input_ids=input_ids,

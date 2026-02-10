@@ -3,7 +3,7 @@ if __name__ == "__main__":
 
     llm = LLM(
         "/data/models/Qwen/Qwen3-8B",
-        enforce_eager=True,
+        enforce_eager=False,
         tensor_parallel_size=1,
         chunked_prefill=True,
     )

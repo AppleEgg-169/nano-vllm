@@ -16,6 +16,7 @@ def main():
         model_path,
         enforce_eager=True,
         max_model_len=4096,
+        gpu_memory_utilization=0.4,
         chunked_prefill=True,
         tensor_parallel_size=2,
     )
