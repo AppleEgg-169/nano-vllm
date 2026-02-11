@@ -1,8 +1,10 @@
 import pickle
+import os
 import torch
 import torch.distributed as dist
 from multiprocessing.synchronize import Event
 from multiprocessing.shared_memory import SharedMemory
+from contextlib import nullcontext
 
 from nanovllm.config import Config
 from nanovllm.engine.sequence import Sequence
@@ -26,6 +28,9 @@ class ModelRunner:
         self.world_size = config.tensor_parallel_size
         self.rank = rank
         self.event = event
+        self.profiler = None
+        self.profiler_started = False
+        self.profiler_dir = None
 
         torch.cuda.set_device(rank)
         dist.init_process_group(
@@ -52,6 +57,7 @@ class ModelRunner:
         self.sampler = Sampler()
         self.warmup_model()
         self.allocate_kv_cache()
+        self._init_profiler()
         if not self.enforce_eager:
             self.capture_cudagraph()
         torch.set_default_device("cpu")
@@ -78,6 +84,11 @@ class ModelRunner:
                 self.loop()
 
     def exit(self):
+        if self.profiler is not None and self.profiler_started:
+            try:
+                self.profile(False)
+            except Exception as e:
+                print(f"[rank {self.rank}]停止 profiler 时发生异常: {e}")
         if self.world_size > 1:
             self.shm.close()
             dist.barrier()
@@ -87,6 +98,67 @@ class ModelRunner:
             del self.graphs, self.graph_pool
         torch.cuda.synchronize()
         dist.destroy_process_group()
+
+    def _init_profiler(self):
+        profiler_dir = self.config.profiler_dir
+        if not profiler_dir:
+            return
+        os.makedirs(profiler_dir, exist_ok=True)
+        self.profiler_dir = profiler_dir
+        worker_name = f"nanovllm-rank-{self.rank}"
+        print(
+            f"[rank {self.rank}]Profiling enabled. Traces will be saved to: {profiler_dir}"
+        )
+        self.profiler = torch.profiler.profile(
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ],
+            record_shapes=False,
+            profile_memory=False,
+            with_stack=True,
+            with_flops=False,
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                profiler_dir, worker_name=worker_name, use_gzip=True
+            ),
+        )
+
+    def annotate_profile(self, seqs: list[Sequence]):
+        if self.profiler is None or not self.profiler_started:
+            return nullcontext()
+        num_cached = sum(1 for seq in seqs if seq.num_cached_tokens > 0)
+        num_new = len(seqs) - num_cached
+        return torch.profiler.record_function(
+            f"execute_new_{num_new}_cached_{num_cached}"
+        )
+
+    def profile(self, is_start: bool = True):
+        if self.profiler is None:
+            raise RuntimeError(
+                "Profiler is not enabled. Please set 'profiler_dir' in the Config to enable profiling."
+            )
+        if is_start:
+            if self.profiler_started:
+                return
+            self.profiler.start()
+            self.profiler_started = True
+            return
+
+        if not self.profiler_started:
+            return
+        self.profiler.stop()
+        self.profiler_started = False
+        sort_key = "self_cuda_time_total"
+        if not torch.cuda.is_available():
+            sort_key = "self_cpu_time_total"
+        table = self.profiler.key_averages().table(sort_by=sort_key)
+        profiler_out_file = os.path.join(
+            self.profiler_dir, f"profiler_out_{self.rank}.txt"
+        )
+        with open(profiler_out_file, "w") as f:
+            print(table, file=f)
+        if self.rank == 0:
+            print(table)
 
     def loop(self):
         while True:
@@ -320,16 +392,17 @@ class ModelRunner:
 
     def run(self, seqs: list[Sequence]) -> list[int]:
         input_ids, positions, seq_need_compute_logits = self.prepare_model_input(seqs)
-        if self.rank == 0 and seq_need_compute_logits:
-            temperatures = self.prepare_sample(seqs, seq_need_compute_logits)
-            logits = self.run_model(input_ids, positions)
-            token_ids = self.sampler(logits, temperatures).tolist()
-        elif self.rank == 0:
-            self.run_model(input_ids, positions)
-            token_ids = []
-        else:
-            token_ids = None
-            self.run_model(input_ids, positions)
+        with self.annotate_profile(seqs):
+            if self.rank == 0 and seq_need_compute_logits:
+                temperatures = self.prepare_sample(seqs, seq_need_compute_logits)
+                logits = self.run_model(input_ids, positions)
+                token_ids = self.sampler(logits, temperatures).tolist()
+            elif self.rank == 0:
+                self.run_model(input_ids, positions)
+                token_ids = []
+            else:
+                token_ids = None
+                self.run_model(input_ids, positions)
         reset_context()
         return token_ids, seq_need_compute_logits
 

@@ -7,7 +7,7 @@ from transformers import AutoConfig
 class Config:
     model: str
     max_num_batched_tokens: int = 16384
-    max_num_seqs: int = 512
+    max_num_seqs: int = 64
     max_model_len: int = 4096
     gpu_memory_utilization: float = 0.8
     tensor_parallel_size: int = 1
@@ -17,6 +17,7 @@ class Config:
     kvcache_block_size: int = 256
     num_kvcache_blocks: int = -1
     chunked_prefill: bool = False
+    profiler_dir: str = ""
 
     def __post_init__(self):
         assert os.path.isdir(self.model)

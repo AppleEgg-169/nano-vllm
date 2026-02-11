@@ -58,6 +58,12 @@ class LLMEngine:
     def is_finished(self):
         return self.scheduler.is_finished()
 
+    def start_profile(self):
+        self.model_runner.call("profile", True)
+
+    def stop_profile(self):
+        self.model_runner.call("profile", False)
+
     def generate(
         self,
         prompts: list[str] | list[list[int]],
