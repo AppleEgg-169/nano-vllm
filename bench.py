@@ -11,12 +11,12 @@ def main():
     max_input_len = 1024
     max_ouput_len = 1024
 
-    model_path = os.path.expanduser("/data/models/Qwen/Qwen3-0.6B")
+    model_path = os.path.expanduser("/data/models/Qwen/Qwen3-8B")
     llm = LLM(
         model_path,
         enforce_eager=True,
-        max_model_len=4096,
-        gpu_memory_utilization=0.4,
+        max_num_batched_tokens=65536,
+        gpu_memory_utilization=0.9,
         chunked_prefill=True,
         tensor_parallel_size=2,
     )

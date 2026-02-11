@@ -108,9 +108,6 @@ def _check_input(x: torch.Tensor, weight: torch.Tensor) -> None:
 
 def rms_norm_forward(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
     _check_input(x, weight)
-    if torch.is_grad_enabled() and (x.requires_grad or weight.requires_grad):
-        raise RuntimeError("Triton RMSNorm is forward-only in nano-vllm.")
-
     x_contig = x.contiguous()
     w_contig = weight.contiguous()
     n_col = x_contig.shape[-1]
@@ -141,19 +138,11 @@ def add_rms_norm_forward(
     x: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, eps: float
 ) -> tuple[torch.Tensor, torch.Tensor]:
     _check_input(x, weight)
-    if not residual.is_cuda:
-        raise RuntimeError(
-            f"Triton add+RMSNorm requires CUDA tensor `residual`, got {residual.device}."
-        )
     if x.shape != residual.shape:
         raise RuntimeError(
             "Triton add+RMSNorm expects x and residual with same shape, got "
             f"{x.shape} and {residual.shape}."
         )
-    if torch.is_grad_enabled() and (
-        x.requires_grad or residual.requires_grad or weight.requires_grad
-    ):
-        raise RuntimeError("Triton add+RMSNorm is forward-only in nano-vllm.")
 
     x_contig = x.contiguous()
     residual_contig = residual.contiguous()
