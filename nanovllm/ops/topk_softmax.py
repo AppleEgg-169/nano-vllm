@@ -2,6 +2,7 @@ import torch
 import triton
 import triton.language as tl
 
+
 @triton.jit
 def topk_softmax_kernel(
     logits_ptr,
@@ -103,9 +104,8 @@ def reference_topk_softmax(logits, topk):
     return probs, indices
 
 
-
 if __name__ == "__main__":
-    torch.manual_seed(42) 
+    torch.manual_seed(42)
     logits = torch.randn((1024, 128), dtype=torch.bfloat16, device="cuda")
     topk = 8
 

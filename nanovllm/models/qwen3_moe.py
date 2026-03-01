@@ -1,6 +1,5 @@
 import torch
 import torch.distributed as dist
-import torch.nn.functional as F
 from torch import nn
 from transformers import Qwen3MoeConfig
 
@@ -14,6 +13,7 @@ from nanovllm.layers.linear import (
     RowParallelLinear,
 )
 from nanovllm.layers.rotary_embedding import get_rope
+from nanovllm.ops.topk_softmax import topk_softmax
 
 
 class Qwen3MoeAttention(nn.Module):
@@ -59,7 +59,6 @@ class Qwen3MoeAttention(nn.Module):
             rotary_dim=self.head_dim,
             max_position=max_position,
             base=rope_theta,
-            rope_scaling=rope_scaling,
         )
         self.attn = Attention(
             self.num_heads,
@@ -77,15 +76,14 @@ class Qwen3MoeAttention(nn.Module):
     ) -> torch.Tensor:
         qkv = self.qkv_proj(hidden_states)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
-        q_by_head = q.view(-1, self.num_heads, self.head_dim)
-        q_by_head = self.q_norm(q_by_head)
-        q = q_by_head.view(q.shape)
-        k_by_head = k.view(-1, self.num_kv_heads, self.head_dim)
-        k_by_head = self.k_norm(k_by_head)
-        k = k_by_head.view(k.shape)
+        q = q.view(-1, self.num_heads, self.head_dim)
+        k = k.view(-1, self.num_kv_heads, self.head_dim)
+        v = v.view(-1, self.num_kv_heads, self.head_dim)
+        q = self.q_norm(q)
+        k = self.k_norm(k)
         q, k = self.rotary_emb(positions, q, k)
         o = self.attn(q, k, v)
-        output = self.o_proj(o)
+        output = self.o_proj(o.flatten(1, -1))
         return output
 
 
@@ -147,12 +145,8 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
         sequence_length, hidden_dim = hidden_states.shape
         router_logits = self.gate(hidden_states)
 
-        routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
-        routing_weights, selected_experts = torch.topk(
-            routing_weights, self.top_k, dim=-1
-        )
-        routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
-        # we cast back to the input dtype
+        routing_weights, selected_experts = topk_softmax(router_logits, self.top_k)
+        selected_experts = selected_experts.long()  # (seq_len, top_k)
         routing_weights = routing_weights.to(hidden_states.dtype)
 
         final_hidden_states = torch.zeros(

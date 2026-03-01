@@ -7,18 +7,18 @@ from nanovllm import LLM, SamplingParams
 
 def main():
     seed(0)
-    num_seqs = 160
-    max_input_len = 512
-    max_ouput_len = 256
+    num_seqs = 400
+    max_input_len = 1024
+    max_ouput_len = 512
 
-    model_path = os.path.expanduser("/data/models/Qwen/Qwen3-8B")
+    model_path = os.path.expanduser("/data/models/Qwen/Qwen3-4B/")
     llm = LLM(
         model_path,
-        enforce_eager=True,
+        enforce_eager=False,
         max_num_batched_tokens=65536,
-        gpu_memory_utilization=0.9,
+        gpu_memory_utilization=0.4,
         chunked_prefill=True,
-        tensor_parallel_size=2,
+        tensor_parallel_size=1,
     )
     prompt_token_ids = [
         [randint(0, 10000) for _ in range(randint(100, max_input_len))]
@@ -35,7 +35,9 @@ def main():
 
     llm.generate(["Benchmark: "], SamplingParams())
     t = time.time()
+    # llm.start_profile()
     llm.generate(prompt_token_ids, sampling_params, use_tqdm=False)
+    # llm.stop_profile()
     t = time.time() - t
     total_tokens = sum(sp.max_tokens for sp in sampling_params)
     throughput = total_tokens / t

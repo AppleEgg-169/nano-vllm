@@ -2,8 +2,20 @@ import torch
 from torch import nn
 import triton
 import triton.language as tl
+import os
 
 from nanovllm.utils.context import get_context
+
+try:
+    from flash_attn import flash_attn_varlen_func
+
+    _HAS_FLASH_ATTN = True
+except Exception:
+    flash_attn_varlen_func = None
+    _HAS_FLASH_ATTN = False
+
+_USE_FLASH_ATTN = os.getenv("NANOVLLM_USE_FLASH_ATTN", "1") != "0"
+_USE_FLASH_ATTN_CUDAGRAPH = os.getenv("NANOVLLM_FLASH_ATTN_CUDAGRAPH", "1") != "0"
 
 
 @triton.jit
@@ -72,6 +84,54 @@ def _expand_kv_heads(
     return k, v
 
 
+def _can_use_flash_attn(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> bool:
+    if not _USE_FLASH_ATTN:
+        return False
+    if not _HAS_FLASH_ATTN:
+        return False
+    if not (q.is_cuda and k.is_cuda and v.is_cuda):
+        return False
+    if q.dtype not in (torch.float16, torch.bfloat16):
+        return False
+    if q.size(-1) > 256:
+        return False
+    return True
+
+
+def _flash_varlen_attention(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    cu_seqlens_q: torch.Tensor,
+    cu_seqlens_k: torch.Tensor,
+    scale: float,
+    block_table: torch.Tensor | None = None,
+    causal: bool = True,
+    max_seqlen_q: int | None = None,
+    max_seqlen_k: int | None = None,
+) -> torch.Tensor:
+    if cu_seqlens_q.numel() <= 1:
+        return q.new_empty((0, q.size(1), q.size(2)))
+
+    if max_seqlen_q is None:
+        max_seqlen_q = int((cu_seqlens_q[1:] - cu_seqlens_q[:-1]).max().item())
+    if max_seqlen_k is None:
+        max_seqlen_k = int((cu_seqlens_k[1:] - cu_seqlens_k[:-1]).max().item())
+    return flash_attn_varlen_func(
+        q=q,
+        k=k,
+        v=v,
+        cu_seqlens_q=cu_seqlens_q,
+        cu_seqlens_k=cu_seqlens_k,
+        max_seqlen_q=max_seqlen_q,
+        max_seqlen_k=max_seqlen_k,
+        dropout_p=0.0,
+        softmax_scale=scale,
+        causal=causal,
+        block_table=block_table,
+    )
+
+
 def _torch_varlen_attention_cudagraph_decode(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -134,7 +194,9 @@ def torch_varlen_attention(
 ) -> torch.Tensor:
     # q: [total_q, num_heads, d]
     # k,v: [total_k, num_kv_heads, d] OR cache [num_blocks, block_size, num_kv_heads, d] when block_table is not None
-    if torch.cuda.is_current_stream_capturing():
+    context = get_context()
+    is_capturing = torch.cuda.is_current_stream_capturing()
+    if is_capturing:
         if (
             block_table is None
             or cu_seqlens_q.numel() != q.size(0) + 1
@@ -144,6 +206,25 @@ def torch_varlen_attention(
                 "torch_varlen_attention under CUDA Graph requires decode layout "
                 "(one query token per sequence) with block table."
             )
+        if _USE_FLASH_ATTN_CUDAGRAPH and _can_use_flash_attn(q, k, v):
+            # During CUDA graph capture, avoid any host sync from tensor.item().
+            # Use static upper bounds for the captured graph.
+            max_seqlen_q = max(context.max_seqlen_q, 1)
+            max_seqlen_k = max(context.max_seqlen_k, 1)
+            if block_table is not None and k.dim() == 4:
+                max_seqlen_k = block_table.size(1) * k.size(1)
+            return _flash_varlen_attention(
+                q=q,
+                k=k,
+                v=v,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_k=cu_seqlens_k,
+                scale=scale,
+                block_table=block_table,
+                causal=causal,
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_k=max_seqlen_k,
+            )
         return _torch_varlen_attention_cudagraph_decode(
             q=q,
             k=k,
@@ -151,6 +232,20 @@ def torch_varlen_attention(
             cu_seqlens_k=cu_seqlens_k,
             scale=scale,
             block_table=block_table,
+        )
+
+    if _can_use_flash_attn(q, k, v):
+        return _flash_varlen_attention(
+            q=q,
+            k=k,
+            v=v,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_k=cu_seqlens_k,
+            scale=scale,
+            block_table=block_table,
+            causal=causal,
+            max_seqlen_q=context.max_seqlen_q or None,
+            max_seqlen_k=context.max_seqlen_k or None,
         )
 
     cu_q = cu_seqlens_q.detach().cpu().tolist()
@@ -237,6 +332,7 @@ class Attention(nn.Module):
 
         if context.block_tables is not None:  # prefix cache
             k, v = k_cache, v_cache
+
         o = torch_varlen_attention(
             q,
             k,

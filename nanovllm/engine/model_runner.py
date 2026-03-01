@@ -9,6 +9,7 @@ from contextlib import nullcontext
 from nanovllm.config import Config
 from nanovllm.engine.sequence import Sequence
 from nanovllm.models.qwen3 import Qwen3ForCausalLM
+from nanovllm.models.qwen3_moe import Qwen3MoeForCausalLM
 from nanovllm.layers.sampler import Sampler
 from nanovllm.utils.context import set_context, get_context, reset_context
 from nanovllm.utils.loader import load_model
@@ -17,6 +18,28 @@ from nanovllm.utils.loader import load_model
 def _is_cuda_oom_error(exc: BaseException) -> bool:
     msg = str(exc).lower()
     return ("out of memory" in msg) or ("cudaerrormemoryallocation" in msg)
+
+
+def _build_model(hf_config):
+    model_type = getattr(hf_config, "model_type", None)
+    architectures = getattr(hf_config, "architectures", []) or []
+    if model_type == "qwen3_moe" or "Qwen3MoeForCausalLM" in architectures:
+        return Qwen3MoeForCausalLM(hf_config)
+    if model_type == "qwen3" or "Qwen3ForCausalLM" in architectures:
+        return Qwen3ForCausalLM(hf_config)
+    raise ValueError(
+        "Unsupported model config for nano-vllm. "
+        f"model_type={model_type}, architectures={architectures}. "
+        "Expected qwen3 or qwen3_moe."
+    )
+
+
+def _disable_cudagraph_for_model(hf_config) -> bool:
+    model_type = getattr(hf_config, "model_type", None)
+    architectures = getattr(hf_config, "architectures", []) or []
+    # Current MoE path uses dynamic expert routing ops (e.g. nonzero/where),
+    # which are not CUDA-graph-capture safe.
+    return model_type == "qwen3_moe" or "Qwen3MoeForCausalLM" in architectures
 
 
 class ModelRunner:
@@ -49,11 +72,16 @@ class ModelRunner:
             f"[rank {self.rank}]总内存大小为 {total / 1024**3:.2f} GB，已被占用内存为 {used / 1024**3:.2f} GB"
         )
         print(f"[rank {self.rank}]正在加载模型...")
-        self.model = Qwen3ForCausalLM(hf_config)
+        self.model = _build_model(hf_config)
         load_model(self.model, config.model)
         print(
             f"[rank {self.rank}]模型加载完成，占用内存为 {(torch.cuda.memory_stats()['allocated_bytes.all.current']) / 1024**3:.2f} GB。"
         )
+        if (not self.enforce_eager) and _disable_cudagraph_for_model(hf_config):
+            self.enforce_eager = True
+            print(
+                f"[rank {self.rank}]检测到 MoE 模型，CUDA Graph capture 已关闭，使用 eager 执行。"
+            )
         self.sampler = Sampler()
         self.warmup_model()
         self.allocate_kv_cache()
