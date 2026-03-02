@@ -16,7 +16,7 @@ class Config:
     eos: int = -1
     kvcache_block_size: int = 256
     num_kvcache_blocks: int = -1
-    chunked_prefill: bool = False
+    chunked_prefill: bool = True
     profiler_dir: str = ""
 
     def __post_init__(self):

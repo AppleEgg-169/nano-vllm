@@ -18,7 +18,7 @@ def main():
         max_num_batched_tokens=65536,
         gpu_memory_utilization=0.4,
         chunked_prefill=True,
-        tensor_parallel_size=1,
+        tensor_parallel_size=2,
     )
     prompt_token_ids = [
         [randint(0, 10000) for _ in range(randint(100, max_input_len))]
