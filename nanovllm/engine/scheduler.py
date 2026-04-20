@@ -43,7 +43,6 @@ class Scheduler:
                 num_new_tokens, self.max_model_len - 1 - seq.num_cached_tokens
             )
 
-            # TODO: num_new_tokens can be 0 when chunked_prefill is enabled!
             assert num_new_tokens > 0
             while not self.block_manager.can_append(seq, num_new_tokens):
                 preempted = True
